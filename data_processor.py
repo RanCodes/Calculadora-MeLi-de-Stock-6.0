@@ -201,6 +201,8 @@ def unir_y_validar(df_ml: pd.DataFrame, df_odoo: pd.DataFrame) -> pd.DataFrame:
     # Validar matcheo
     no_match_mask = df_merged['Código Neored'].isna()
     df_merged.loc[no_match_mask, 'Notas/Flags'] = 'SKU no encontrado en Odoo'
+    df_merged.loc[no_match_mask, 'Precio Tarifa'] = 0.0
+    df_merged.loc[no_match_mask, 'Cantidad a mano'] = 0.0
 
     # Validar datos críticos
     missing_price_mask = (df_merged['Precio Tarifa'].isna()) | (df_merged['Precio Tarifa'] == 0)
@@ -240,6 +242,7 @@ def calcular(
     if 'Notas/Flags' not in df_calc.columns:
         df_calc['Notas/Flags'] = ''
     df_calc['Notas/Flags'] = df_calc['Notas/Flags'].fillna('')
+    matched_mask = df_calc['Código Neored'].notna()
 
     df_calc['Precio de Tarifa'] = pd.to_numeric(
         df_calc['Precio Tarifa'], errors='coerce'
@@ -320,16 +323,20 @@ def calcular(
     else:
         retenciones_pct = pd.Series(0.0, index=df_calc.index)
 
-    calculos = [
-        calcular_precio_publicacion_ml(
-            tarifa_neta=tarifa_objetivo.iat[idx],
-            porcentaje_comision=fee_pct.iat[idx],
-            porcentaje_financiacion=financing_pct.iat[idx],
-            porcentaje_retenciones=retenciones_pct.iat[idx],
-            costo_fijo=fee_fixed.iat[idx],
-        )
-        for idx in range(len(df_calc))
-    ]
+    calculos = []
+    for idx in range(len(df_calc)):
+        if matched_mask.iat[idx]:
+            calculos.append(
+                calcular_precio_publicacion_ml(
+                    tarifa_neta=tarifa_objetivo.iat[idx],
+                    porcentaje_comision=fee_pct.iat[idx],
+                    porcentaje_financiacion=financing_pct.iat[idx],
+                    porcentaje_retenciones=retenciones_pct.iat[idx],
+                    costo_fijo=fee_fixed.iat[idx],
+                )
+            )
+        else:
+            calculos.append((0.0, 0.0, 0.0, 0.0, 0.0, False))
 
     calculos_df = pd.DataFrame(
         calculos,
@@ -351,6 +358,20 @@ def calcular(
     df_calc['Recibis ($)'] = calculos_df['Recibis ($)']
     df_calc['Recargo fijo ML ($)'] = fee_fixed
     df_calc['Recargo % ML (importe)'] = df_calc['Precio final'] * fee_pct
+
+    if (~matched_mask).any():
+        columnas_ceros = [
+            'Recargo % ML (importe)',
+            'Recargo fijo ML ($)',
+            'Cargo por vender ($)',
+            'Recargo financiación (importe)',
+            'Recargo envío ($)',
+            'Retenciones ML ($)',
+            'Recibis ($)',
+            'IVA',
+            'Precio final',
+        ]
+        df_calc.loc[~matched_mask, columnas_ceros] = 0.0
 
     invalid_mask = calculos_df['Denominador inválido']
     if invalid_mask.any():
