@@ -248,6 +248,17 @@ def calcular(
         df_calc['Precio Tarifa'], errors='coerce'
     ).fillna(0.0)
 
+    stock_disponible = pd.to_numeric(
+        df_calc.get('Cantidad a mano', pd.Series(index=df_calc.index, dtype=float)),
+        errors='coerce'
+    )
+
+    datos_completos_mask = (
+        matched_mask
+        & (df_calc['Precio de Tarifa'] > 0)
+        & stock_disponible.notna()
+    )
+
     tax_pct = pd.to_numeric(df_calc.get('tax_pct', 0.0), errors='coerce').fillna(0.0)
     tarifa_base = df_calc['Precio de Tarifa']
     tarifa_con_impuestos = tarifa_base * (1 + tax_pct)
@@ -293,6 +304,8 @@ def calcular(
     else:
         aplica_envio = pd.Series(False, index=df_calc.index, dtype=bool)
 
+    aplica_envio &= datos_completos_mask
+
     # Calcular recargo de envío solo para las filas aplicables
     tipo_envio = tipo_recargo_envio.lower() if isinstance(tipo_recargo_envio, str) else 'ninguno'
     if tipo_envio.startswith('fijo') and valor_recargo_envio:
@@ -325,7 +338,7 @@ def calcular(
 
     calculos = []
     for idx in range(len(df_calc)):
-        if matched_mask.iat[idx]:
+        if datos_completos_mask.iat[idx]:
             calculos.append(
                 calcular_precio_publicacion_ml(
                     tarifa_neta=tarifa_objetivo.iat[idx],
@@ -359,7 +372,7 @@ def calcular(
     df_calc['Recargo fijo ML ($)'] = fee_fixed
     df_calc['Recargo % ML (importe)'] = df_calc['Precio final'] * fee_pct
 
-    if (~matched_mask).any():
+    if (~datos_completos_mask).any():
         columnas_ceros = [
             'Recargo % ML (importe)',
             'Recargo fijo ML ($)',
@@ -371,7 +384,10 @@ def calcular(
             'IVA',
             'Precio final',
         ]
-        df_calc.loc[~matched_mask, columnas_ceros] = 0.0
+        df_calc.loc[~datos_completos_mask, columnas_ceros] = 0.0
+
+    if stock_disponible.isna().any():
+        df_calc.loc[stock_disponible.isna(), 'Recargo envío ($)'] = 0.0
 
     invalid_mask = calculos_df['Denominador inválido']
     if invalid_mask.any():
